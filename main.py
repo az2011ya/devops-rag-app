@@ -1,0 +1,89 @@
+import os
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import ollama
+from qdrant_client import QdrantClient
+from prometheus_fastapi_instrumentator import Instrumentator
+
+# Initialisation de l'application FastAPI
+app = FastAPI(
+    title="DevOps Knowledge RAG API",
+    description="API REST d'assistance DevOps basée sur Ollama (Llama 3) et Qdrant Vector DB",
+    version="1.0.0"
+)
+
+# Activation des métriques Prometheus
+Instrumentator().instrument(app).expose(app)
+
+# Configuration dynamique des hôtes (Docker ou Local)
+QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+
+# Configuration de l'hôte pour le client Ollama
+os.environ["OLLAMA_HOST"] = OLLAMA_HOST
+
+# Connexion aux services
+qdrant = QdrantClient(host=QDRANT_HOST, port=6333)
+LLM_MODEL = "llama3:8b-instruct-q4_0"
+EMBED_MODEL = "nomic-embed-text"
+COLLECTION_NAME = "devops_knowledge"
+
+# Modèles de données Pydantic
+class QueryRequest(BaseModel):
+    question: str
+
+class QueryResponse(BaseModel):
+    question: str
+    answer: str
+    source: str
+    context: str
+
+@app.get("/")
+def health_check():
+    """Endpoint de santé pour vérifier que l'API est en ligne."""
+    return {"status": "ok", "service": "DevOps RAG API"}
+
+@app.post("/ask", response_model=QueryResponse)
+def ask_rag_endpoint(request: QueryRequest):
+    """
+    Reçoit une question en JSON, effectue la recherche vectorielle dans Qdrant
+    puis génère une réponse guidée avec Llama 3.
+    """
+    try:
+        # 1. Conversion de la question en vecteur
+        query_vector = ollama.embeddings(model=EMBED_MODEL, prompt=request.question)["embedding"]
+        
+        # 2. Recherche du document le plus pertinent dans Qdrant
+        search_results = qdrant.search(
+            collection_name=COLLECTION_NAME,
+            query_vector=query_vector,
+            limit=1
+        )
+        
+        if not search_results:
+            raise HTTPException(status_code=404, detail="Aucun document pertinent trouvé.")
+
+        retrieved_doc = search_results[0].payload["text"]
+        source = search_results[0].payload["source"]
+        
+        # 3. Prompt RAG pour Llama 3
+        prompt = f"""Tu es un assistant DevOps d'entreprise. Réponds à la question en t'appuyant STRICTEMENT sur le contexte fourni ci-dessous.
+Si le contexte ne contient pas l'information, réponds 'Je ne sais pas d'après la documentation'.
+
+Contexte:
+{retrieved_doc}
+
+Question: {request.question}
+Réponse:"""
+
+        response = ollama.generate(model=LLM_MODEL, prompt=prompt)
+        
+        return QueryResponse(
+            question=request.question,
+            answer=response['response'],
+            source=source,
+            context=retrieved_doc
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

@@ -1,0 +1,101 @@
+import ollama
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams, PointStruct
+
+# 1. Connexion aux services
+qdrant = QdrantClient(host="localhost", port=6333)
+LLM_MODEL = "llama3:8b-instruct-q4_0"
+EMBED_MODEL = "nomic-embed-text"
+COLLECTION_NAME = "devops_knowledge"
+
+def setup_collection():
+    """Crée la collection dans Qdrant si elle n'existe pas déjà."""
+    collections = [c.name for c in qdrant.get_collections().collections]
+    if COLLECTION_NAME not in collections:
+        qdrant.create_collection(
+            collection_name=COLLECTION_NAME,
+            vectors_config=VectorParams(size=768, distance=Distance.COSINE),
+        )
+        print(f"Collection '{COLLECTION_NAME}' créée dans Qdrant.")
+    else:
+        print(f"Collection '{COLLECTION_NAME}' déjà existante.")
+
+def index_documents():
+    """Indexe quelques documents DevOps de test avec des embeddings réels."""
+    docs = [
+        {
+            "id": 1,
+            "text": "Politique Kubernetes Prod : Les pods de production doivent obligatoirement définir des limits et requests CPU/RAM. Memory limit max: 4GB.",
+            "source": "k8s-policy.md"
+        },
+        {
+            "id": 2,
+            "text": "Procédure d'urgence DB : En cas de haute charge sur PostgreSQL, exécuter 'SELECT pg_cancel_backend(pid)' pour tuer les requêtes bloquantes.",
+            "source": "db-runbook.md"
+        },
+        {
+            "id": 3,
+            "text": "Réseau SSH : L'accès SSH aux serveurs de staging se fait uniquement via le bastion Bastion-01 (IP 10.0.4.12).",
+            "source": "network-access.md"
+        }
+    ]
+
+    points = []
+    for doc in docs:
+        response = ollama.embeddings(model=EMBED_MODEL, prompt=doc["text"])
+        vector = response["embedding"]
+        
+        points.append(
+            PointStruct(
+                id=doc["id"],
+                vector=vector,
+                payload={"text": doc["text"], "source": doc["source"]}
+            )
+        )
+    
+    qdrant.upsert(collection_name=COLLECTION_NAME, points=points)
+    print("3 documents indexés dans Qdrant !")
+
+def ask_rag(question: str):
+    """Effectue la recherche vectorielle puis interroge Llama 3 avec le contexte."""
+    print(f"\nQuestion : '{question}'")
+    
+    # a. Transformer la question en vecteur
+    query_vector = ollama.embeddings(model=EMBED_MODEL, prompt=question)["embedding"]
+    
+    # b. Recherche vectorielle dans Qdrant
+    search_results = qdrant.search(
+        collection_name=COLLECTION_NAME,
+        query_vector=query_vector,
+        limit=1
+    )
+    
+    if not search_results:
+        print("Aucun document pertinent trouvé.")
+        return
+
+    retrieved_doc = search_results[0].payload["text"]
+    source = search_results[0].payload["source"]
+    print(f"Contexte extrait ([{source}]) : {retrieved_doc}\n")
+    
+    # c. Génération de la réponse via Llama 3
+    prompt = f"""Tu es un assistant DevOps d'entreprise. Réponds à la question en t'appuyant STRICTEMENT sur le contexte fourni ci-dessous.
+Si le contexte ne contient pas l'information, réponds 'Je ne sais pas d'après la documentation'.
+
+Contexte:
+{retrieved_doc}
+
+Question: {question}
+Réponse:"""
+
+    response = ollama.generate(model=LLM_MODEL, prompt=prompt)
+    print("🤖 Réponse de Llama 3 :")
+    print(response['response'])
+
+# --- EXÉCUTION AVEC NOUVELLE QUESTION REFORMULÉE ---
+setup_collection()
+index_documents()
+#ask_rag("C'est quoi le plafond de RAM pour un conteneur ?")
+#ask_rag("La base de données rame complètement, qu'est-ce qu'on fait ?")
+#ask_rag("Comment se connecter à distance aux serveurs de test ?")
+ask_rag("Quel est le code Wi-Fi de la salle de réunion ?")

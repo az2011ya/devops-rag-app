@@ -1,0 +1,35 @@
+def ask_rag(question: str):
+    """Effectue la recherche vectorielle puis interroge Llama 3 avec le contexte."""
+    print(f"\nQuestion : '{question}'")
+    
+    # a. Transformer la question en vecteur
+    query_vector = ollama.embeddings(model=EMBED_MODEL, prompt=question)["embedding"]
+    
+    # b. Recherche compatible avec qdrant-client 1.19+ et Qdrant 1.9.2
+    search_results = qdrant.search_points(
+        collection_name=COLLECTION_NAME,
+        vector=query_vector,
+        limit=1
+    ).points
+    
+    if not search_results:
+        print("Aucun document pertinent trouvé.")
+        return
+
+    retrieved_doc = search_results[0].payload["text"]
+    source = search_results[0].payload["source"]
+    print(f"Contexte extrait ([{source}]) : {retrieved_doc}\n")
+    
+    # c. Génération de la réponse via Llama 3
+    prompt = f"""Tu es un assistant DevOps d'entreprise. Réponds à la question en t'appuyant STRICTEMENT sur le contexte fourni ci-dessous.
+Si le contexte ne contient pas l'information, réponds 'Je ne sais pas d'après la documentation'.
+
+Contexte:
+{retrieved_doc}
+
+Question: {question}
+Réponse:"""
+
+    response = ollama.generate(model=LLM_MODEL, prompt=prompt)
+    print("🤖 Réponse de Llama 3 :")
+    print(response['response'])
