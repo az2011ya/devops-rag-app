@@ -2,7 +2,7 @@ import os
 import glob
 import hashlib
 import requests
-
+ 
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333").strip().strip('"').strip("'").rstrip('/')
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434").strip().strip('"').strip("'").rstrip('/')
 COLLECTION_NAME = "devops_knowledge"
