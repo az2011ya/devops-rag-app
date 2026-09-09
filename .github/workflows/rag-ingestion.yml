@@ -4,7 +4,10 @@ on:
   push:
     branches: [ main, master ]
     paths:
-      - 'docs/*.md'  # Ne se déclenche QUE si un fichier markdown change dans docs/
+      - 'docs/*.md'
+      - 'ingest.py'
+      - '.github/workflows/rag-ingestion.yml'
+  workflow_dispatch:
 
 jobs:
   ingest:
@@ -21,11 +24,10 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests qdrant-client
+          pip install requests
 
       - name: Run Ingestion Script
         env:
-          # Adresses de tes services (exposées via VPN, Ngrok ou IP publique en prod)
           QDRANT_URL: ${{ secrets.QDRANT_URL }}
           OLLAMA_URL: ${{ secrets.OLLAMA_URL }}
         run: |
